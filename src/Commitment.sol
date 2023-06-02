@@ -226,10 +226,13 @@ contract Commitment {
 
     mapping(address => State) public beforeStates;
     mapping(address => State) public afterStates;
-    uint256 public stateCount = 0;
-    uint256 public stateCountAfter = 0;
+    uint256 public stateCount;
+    uint256 public stateCountAfter;
 
-    constructor() {}
+    constructor() {
+        stateCount = 0;
+        stateCountAfter = 0;
+    }
 
     function verifyingKey() internal pure returns (VerifyingKey memory vk) {
         vk.alfa1 = Pairing.G1Point(

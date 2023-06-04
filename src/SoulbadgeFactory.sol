@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "./SoulBadge.sol";
+import "./Soulbadge.sol";
 
-contract CommitmentFactory {
+contract SoulbadgeFactory {
     Soulbadge[] public soulbadges;
     event SoulBadgeCreated(address soulbadge);
 

@@ -15,7 +15,7 @@ contract Governance {
     /// @notice Thrown when attempting to reuse a nullifier
     error InvalidNullifier();
 
-    /// @dev The World ID instance that will be used for verifying proofs
+    /// @dev The World ID instance that                                                                                                                                                                                          will be used for verifying proofs
     IWorldID internal immutable worldId;
 
     /// @dev The contract's external nullifier hash
@@ -43,7 +43,7 @@ contract Governance {
         bool executed;
         bool ended;
         uint256 duration;
-        string state;
+        string checkType;
     }
 
     mapping(address => mapping(uint256 => uint256)) public balances;
@@ -56,6 +56,7 @@ contract Governance {
     //=========================================================================
     // Events and Errors
 
+    event BlockTimestamp(uint256 timestamp);
     event ProposalCreated(uint indexed id, string description);
     event VoteCasted(
         uint indexed proposalId,
@@ -101,7 +102,8 @@ contract Governance {
         address _contractAddress,
         string memory _eventName,
         string[2] memory _soulboundTokenDetails,
-        uint256 _duration
+        uint256 _duration,
+        string memory _type
     ) public {
         proposals.push(
             Proposal({
@@ -117,7 +119,7 @@ contract Governance {
                 noVotes: 0,
                 executed: false,
                 ended: false,
-                state: ""
+                checkType: _type
             })
         );
 
@@ -166,8 +168,6 @@ contract Governance {
 
         voted[msg.sender][proposalId] = true;
         balances[msg.sender][proposalId] += msg.value;
-        address payable recipientAddress = payable(address(this)); // Replace with your desired address
-        recipientAddress.transfer(msg.value);
         totalStaked += msg.value;
         emit VoteCasted(proposalId, msg.sender, support);
     }
@@ -183,7 +183,7 @@ contract Governance {
         }
     }
 
-    function execute(uint256 proposalId) public {
+    function execute(uint256 proposalId) public payable {
         require(
             block.timestamp > proposals[proposalId].duration,
             "Vote has not ended yet."
@@ -193,13 +193,7 @@ contract Governance {
             "Vote did not pass"
         );
 
-        // Deploy the soulbound token using the remaining contract balance
-        require(
-            address(soulboundFactory).balance >= 1 ether,
-            "Insufficient funds in the contract"
-        );
-
-        (bool success, ) = address(soulboundFactory).call{value: 1 ether}(
+        (bool success, ) = address(soulboundFactory).call(
             abi.encodeWithSignature(
                 "createSoulbadge(string,string)",
                 proposals[proposalId].soulboundTokenDetails[0],
@@ -208,11 +202,26 @@ contract Governance {
         );
         require(success, "Failed to deploy soulbound token");
 
+        //update the proposal with the soulbound token address
+
         proposals[proposalId].executed = true;
         emit ProposalExecuted(proposalId);
     }
 
     function getLatestUnusedProposalId() public view returns (uint256) {
-        return proposals.length - 1;
+        return proposals.length;
+    }
+
+    /// @dev Function to get proposal details by id
+    /// @param proposalId The id of the proposal
+    /// @return The proposal details
+    function getProposal(
+        uint256 proposalId
+    ) public view returns (Proposal memory) {
+        return proposals[proposalId];
+    }
+
+    function getTimeStamp() public view returns (uint) {
+        return block.timestamp;
     }
 }

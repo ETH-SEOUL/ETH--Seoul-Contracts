@@ -10,11 +10,11 @@ import "../lib/openzeppelin-contracts/contracts/utils/Counters.sol";
 import "../lib/openzeppelin-contracts/contracts/security/ReentrancyGuard.sol";
 
 /**
- * @title SoulBagde
+ * @title Soulbadge
  * Non-tranferrable digital badge using Soulbound Token
  */
 
-contract SoulBadge is ERC721URIStorage, Ownable {
+contract Soulbadge is ERC721URIStorage, Ownable {
     using Counters for Counters.Counter;
 
     Counters.Counter private _tokenIdCounter;
@@ -22,7 +22,10 @@ contract SoulBadge is ERC721URIStorage, Ownable {
     event Attest(address indexed to, uint256 indexed tokenId);
     event Revoke(address indexed to, uint256 indexed tokenId);
 
-    constructor() ERC721("BBToken", "BBTK") {}
+    constructor(
+        string memory name,
+        string memory symbol
+    ) ERC721(name, symbol) {}
 
     function safeMint(address to, string memory uri) public {
         uint256 tokenId = _tokenIdCounter.current();

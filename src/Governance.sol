@@ -1,54 +1,62 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.17;
 
-import "./DeploySoulbound.sol";
+import "./SoulbadgeFactory.sol";
+import {ByteHasher} from "./helpers/ByteHasher.sol";
+import {IWorldID} from "./interfaces/IWorldID.sol";
 
 contract Governance {
     /// @notice This contract aims to get the DAO members to vote on whether or not they would like to pass a certain soulbound token with given requirement details.
 
     //=========================================================================
     // State Variables
+    using ByteHasher for bytes;
+
+    /// @notice Thrown when attempting to reuse a nullifier
+    error InvalidNullifier();
+
+    /// @dev The World ID instance that                                                                                                                                                                                          will be used for verifying proofs
+    IWorldID internal immutable worldId;
+
+    /// @dev The contract's external nullifier hash
+    uint256 internal immutable externalNullifier;
+
+    /// @dev The World ID group ID (always 1)
+    uint256 internal immutable groupId = 1;
+
+    /// @dev Whether a nullifier hash has been used already. Used to guarantee an action is only performed once by a single person
+    mapping(uint256 => bool) internal nullifierHashes;
 
     // address of soulbound factory
     address public soulboundFactory;
-
-    //// @notice Store details related to the contract proposal
-    /// @dev These are the details contained by the proposal struct
-    /// @param id The id of the proposal
-    /// @param description The description of the proposal
-    /// @param target The address of the contract to be deployed
-    /// @param value The amount of ether to be sent to the contract
-    /// @param soulboundTokenDetails The details of the soulbound token to be deployed (name, symbol, etc.)
-    /// @param voteCount The number of votes the proposal has received
-    /// @param executed Whether or not the proposal has been executed
 
     struct Proposal {
         uint256 id;
         string description;
         address target;
+        address contractAddress;
+        string eventName;
         uint256 value;
-        string[] soulboundTokenDetails;
-        uint256 voteCount;
+        string[2] soulboundTokenDetails;
+        uint256 yesVotes;
+        uint256 noVotes;
         bool executed;
         bool ended;
         uint256 duration;
+        string checkType;
     }
 
-    /// @notice Store details related to the voter such as whether or not they have voted, their vote, and their weight
-    struct Voter {
-        mapping(uint256 => bool) voted; //this is a mapping of proposalId to bool
-        mapping(uint256 => uint256) balances; //this is a mapping of proposalId to how much they deposited
-    }
+    mapping(address => mapping(uint256 => uint256)) public balances;
+    mapping(address => mapping(uint256 => bool)) public voted;
 
-    /// @notice Cumulative staked amount
     uint256 public totalStaked;
 
     Proposal[] public proposals;
-    mapping(address => Voter) public voters;
 
     //=========================================================================
     // Events and Errors
 
+    event BlockTimestamp(uint256 timestamp);
     event ProposalCreated(uint indexed id, string description);
     event VoteCasted(
         uint indexed proposalId,
@@ -70,106 +78,150 @@ contract Governance {
         _;
     }
 
-    modifier canVote(uint proposalId) {
-        require(
-            !proposals[proposalId].executed,
-            "Proposal has already been executed"
-        );
-        require(
-            !proposals[proposalId].votes[msg.sender],
-            "You have already voted on this proposal"
-        );
-        _;
-    }
-
     //=========================================================================
     // Constructor
 
-    constructor(address _soulboundFactory) {
+    constructor(
+        address _soulboundFactory,
+        IWorldID _worldId,
+        string memory _appId,
+        string memory _actionId
+    ) {
         soulboundFactory = _soulboundFactory;
+        worldId = _worldId;
+        externalNullifier = abi
+            .encodePacked(abi.encodePacked(_appId).hashToField(), _actionId)
+            .hashToField();
     }
 
     //=========================================================================
     // Functions
 
-    /// @notice Create a new proposal
-    /// @dev The arguments required to create a new proposal are
-    /// @param _description The description of the proposal
-    /// @param _target The address of the contract to be deployed
-    /// @param _soulboundTokenDetails The details of the soulbound token to be deployed (name, symbol, etc.)
-    /// @param _duration The duration of the vote in epoch
     function createProposal(
         string memory _description,
-        address _target,
-        string[] memory _soulboundTokenDetails,
-        uint256 _duration
+        address _contractAddress,
+        string memory _eventName,
+        string[2] memory _soulboundTokenDetails,
+        uint256 _duration,
+        string memory _type
     ) public {
         proposals.push(
             Proposal({
                 id: proposals.length,
                 description: _description,
                 duration: _duration,
-                target: _target,
+                target: address(0),
+                contractAddress: _contractAddress,
+                eventName: _eventName,
                 value: 0,
-                soulboundTokenDetails: _soulboundTokenDetails,
-                voteCount: 0,
+                soulboundTokenDetails: ["", ""],
+                yesVotes: 0,
+                noVotes: 0,
                 executed: false,
-                ended: false
+                ended: false,
+                checkType: _type
             })
         );
 
         emit ProposalCreated(proposals.length - 1, _description);
     }
 
-    /// @notice When the voter casts a vote, they have to pay some MATIC for the vote to go through
+    /// @param signal An arbitrary input from the user, usually the user's wallet address (check README for further details)
+    /// @param root The root of the Merkle tree (returned by the JS widget).
+    /// @param nullifierHash The nullifier hash for this proof, preventing double signaling (returned by the JS widget).
+    /// @param proof The zero-knowledge proof that demonstrates the claimer is registered with World ID (returned by the JS widget).
+    /// @dev Feel free to rename this method however you want! We've used `claim`, `verify` or `execute` in the past.
+    function verifyVoter(
+        address signal,
+        uint256 root,
+        uint256 nullifierHash,
+        uint256[8] calldata proof
+    ) public {
+        // First, we make sure this person hasn't done this before
+        if (nullifierHashes[nullifierHash]) revert InvalidNullifier();
+
+        // We now verify the provided proof is valid and the user is verified by World ID
+        worldId.verifyProof(
+            root,
+            groupId,
+            abi.encodePacked(signal).hashToField(),
+            nullifierHash,
+            externalNullifier,
+            proof
+        );
+
+        // We now record the user has done this, so they can't do it again (proof of uniqueness)
+        nullifierHashes[nullifierHash] = true;
+    }
+
     function vote(uint256 proposalId, bool support) public payable {
         Proposal storage proposal = proposals[proposalId];
         require(!proposal.ended, "Vote has ended.");
         require(!proposal.executed, "Proposal has already been executed.");
-        Voter storage sender = voters[msg.sender];
-        require(!sender.voted[proposalId], "Already voted.");
+        require(!voted[msg.sender][proposalId], "You have already voted.");
 
         if (support) {
-            proposal.voteCount += 1;
+            proposal.yesVotes += 1;
         } else {
-            proposal.voteCount -= 1;
+            proposal.noVotes += 1;
         }
 
-        sender.voted = true;
-        sender.balance += msg.value;
+        voted[msg.sender][proposalId] = true;
+        balances[msg.sender][proposalId] += msg.value;
+        totalStaked += msg.value;
         emit VoteCasted(proposalId, msg.sender, support);
     }
 
-    /// @notice Allow users to withdraw funds they sent along with the vote if the vote did not pass
-
     function withdraw(uint256 proposalId) public {
         Proposal storage proposal = proposals[proposalId];
-        Voter storage sender = voters[msg.sender];
-        require(proposal.ended, "Vote has not ended.");
-        require(sender.balances[proposalId] > 0, "Nothing to withdraw.");
-        uint256 amount = sender.balances[proposalId];
+        require(!proposal.ended, "Vote has ended.");
+        require(balances[msg.sender][proposalId] > 0, "You have no balance.");
+        uint256 amount = balances[msg.sender][proposalId];
         if (amount > 0) {
-            sender.balances[proposalId] = 0;
+            balances[msg.sender][proposalId] = 0;
             payable(msg.sender).transfer(amount);
         }
     }
 
-    // ends the vote
-    // if DAO decided not to buy cupcakes members can withdraw deposited ether
-    function EndVote(uint256 proposalId) public {
-        require(block.timestamp > proposals[proposalId].duration);
-
+    function execute(uint256 proposalId) public payable {
         require(
-            proposals[proposalId].voteCount > 0,
-            "DAO decided to not buy cupcakes. Members may withdraw deposited ether."
+            block.timestamp > proposals[proposalId].duration,
+            "Vote has not ended yet."
+        );
+        require(
+            proposals[proposalId].yesVotes > proposals[proposalId].noVotes,
+            "Vote did not pass"
         );
 
-        (bool success, ) = address(soulboundFactory).call{value: 1 ether}(
+        (bool success, ) = address(soulboundFactory).call(
             abi.encodeWithSignature(
-                "createSoulbound(string[])",
-                proposals[proposalId].soulboundTokenDetails
+                "createSoulbadge(string,string)",
+                proposals[proposalId].soulboundTokenDetails[0],
+                proposals[proposalId].soulboundTokenDetails[1]
             )
         );
         require(success, "Failed to deploy soulbound token");
+
+        //update the proposal with the soulbound token address
+
+        proposals[proposalId].executed = true;
+        emit ProposalExecuted(proposalId);
+    }
+
+    function getLatestUnusedProposalId() public view returns (uint256) {
+        return proposals.length;
+    }
+
+    /// @dev Function to get proposal details by id
+    /// @param proposalId The id of the proposal
+    /// @return The proposal details
+    function getProposal(
+        uint256 proposalId
+    ) public view returns (Proposal memory) {
+        return proposals[proposalId];
+    }
+
+    function getTimeStamp() public view returns (uint) {
+        return block.timestamp;
     }
 }
